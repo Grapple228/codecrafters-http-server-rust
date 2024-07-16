@@ -7,8 +7,37 @@
         {
             "type": "lldb",
             "request": "launch",
-            "name": "Debug",
-            "program": "${workspaceFolder}/<executable file>",
+            "name": "Debug executable 'http-server-starter-rust'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=http-server-starter-rust",
+                    "--package=http-server-starter-rust"
+                ],
+                "filter": {
+                    "name": "http-server-starter-rust",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'http-server-starter-rust'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=http-server-starter-rust",
+                    "--package=http-server-starter-rust"
+                ],
+                "filter": {
+                    "name": "http-server-starter-rust",
+                    "kind": "bin"
+                }
+            },
             "args": [],
             "cwd": "${workspaceFolder}"
         }
