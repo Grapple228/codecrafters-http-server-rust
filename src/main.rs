@@ -21,7 +21,7 @@ enum StatusCode{
 
 impl fmt::Display for StatusCode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", *self as u8)
+        write!(f, "{:?}", *self as i32)
     }
 }
 
