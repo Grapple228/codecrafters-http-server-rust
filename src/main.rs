@@ -1,7 +1,8 @@
 // Uncomment this block to pass the first stage
 use std::{
-        fmt, io::{BufRead, BufReader, BufWriter, Write}, net::{TcpListener, TcpStream}};
+        collections::HashMap, default, env::{self, vars}, fmt, fs::File, io::{BufRead, BufReader, BufWriter, Read, Write}, net::{TcpListener, TcpStream}, path::{self, Path}};
 
+use bytes::buf;
 use http_server_starter_rust::ThreadPool;
 enum RequestType {
     GET,
@@ -10,7 +11,6 @@ enum RequestType {
     DELETE,
     UNKNOWN
 }
-
 
 #[derive(Debug, Copy, Clone)]
 enum StatusCode{
@@ -108,20 +108,18 @@ impl Request {
 struct Response{
     status_code: StatusCode,
     status_message: String,
-    contents: String
+    contents: Vec<u8>,
+    content_type:String
 }
 
 impl Response {
-    fn new(status_code: StatusCode, status_message: String, contents: String) -> Self {
-        Self { status_code, status_message, contents }
-    }
-
     fn to_string(&self) -> String{
-        let var_name: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: text/plain\r\nContent-Length: {2}\r\n\r\n{3}", 
+        let var_name: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\n\r\n{4}", 
         self.status_code, 
         self.status_message, 
+        self.content_type,
         self.contents.len(), 
-        self.contents);
+        String::from_utf8(self.contents.to_owned()).unwrap());
         var_name
     }
 }
@@ -129,14 +127,51 @@ impl Response {
 fn process_request(request: Request) -> Response {    
     let path_segments: &[&str] = &split_into(&request.path, '/');
     
-    let (status_code, status_message, contents): (StatusCode, &str, &str) = match &path_segments {
-        [] | ["index.html"] => (StatusCode::OK, "OK", ""), 
-        ["user-agent"] => (StatusCode::OK, "OK", &request.user_agent),
-        ["echo", _echo] => (StatusCode::OK, "OK", *_echo),
-        _ => (StatusCode::NotFound, "Not Found", "")
+    let mut status_code = StatusCode::OK;
+    let mut content_type: &str = "text/plain";
+    let mut contents: Vec<u8> = "".as_bytes().to_owned();
+    let mut status_message: &str = "OK";
+    let _directory: String;
+
+    match &path_segments {
+        [] | ["index.html"] => {},
+        ["user-agent"] => {
+            contents = request.user_agent.as_bytes().to_owned();
+        }
+        ["echo", _echo] => {
+            contents = _echo.as_bytes().to_owned();
+        },
+        ["files", _filename] => {
+            _directory = env::var("directory").unwrap_or("Path not set".to_string());
+
+            let combined_path = format!("{_directory}/{_filename}");
+            let _path =Path::new(&combined_path);
+            
+            println!("Trying to get file '{_path:#?}'");
+
+            if _path.exists(){
+                let _file = File::open(_path).unwrap();
+
+                let mut reader = BufReader::new(_file);
+                let _ = reader.read_to_end(&mut contents);
+                
+                content_type = "application/octet-stream";
+            } else{
+                status_code = StatusCode::NotFound;
+                status_message = "Not Found";
+            }
+        },
+        _ => {
+            status_code = StatusCode::NotFound;
+            status_message = "Not Found";
+        }
     };
 
-    Response::new(status_code, status_message.to_owned(), contents.to_owned())
+    {
+        let status_message = status_message.to_owned();
+        let content_type = content_type.to_owned();
+        Response { status_code, status_message, contents, content_type }
+    }
 }
 
 fn handle_client(mut stream: TcpStream){
@@ -160,9 +195,43 @@ fn handle_client(mut stream: TcpStream){
     }
 }
 
+fn process_agrs() {
+    let args: Vec<String> = env::args().collect();
+    println!("Processing args:\n{args:#?}");
+    
+    let mut hashmap: HashMap<String, String> = HashMap::new();
+
+    let mut key: String = String::new();
+    let mut is_has_key: bool = false;
+    let mut iter = IntoIterator::into_iter(args);
+    loop {
+        match iter.next() {
+            Some(i) => {
+                let value = i.as_str();
+                match &value[..2] {
+                    "--" => {
+                        is_has_key = true;
+                        key = value.to_string().replace("--", "");
+                    }
+                    _ => {
+                        if is_has_key{
+                            hashmap.insert(key.to_string(), value.to_owned());
+                            is_has_key = false;
+                        }
+                    }
+                }
+            },
+            None => break
+        }
+    }
+    
+    for (key, value) in hashmap.into_iter() {
+        env::set_var(key, value);
+    }
+}
+
 fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+    process_agrs();
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
     let pool = ThreadPool::new(4);
