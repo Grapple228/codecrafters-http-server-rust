@@ -2,6 +2,7 @@
 use std::{
         fmt, io::{BufRead, BufReader, BufWriter, Write}, net::{TcpListener, TcpStream}};
 
+use http_server_starter_rust::ThreadPool;
 enum RequestType {
     GET,
     POST,
@@ -164,12 +165,15 @@ fn main() {
     println!("Logs from your program will appear here!");
 
     let listener = TcpListener::bind("127.0.0.1:4221").unwrap();
-    
+    let pool = ThreadPool::new(4);
+
     for stream in listener.incoming() {
         match stream {
             Ok(_stream) => {
-                println!("accepted new connection");
-                handle_client(_stream);
+                pool.execute(||{
+                    println!("accepted new connection");
+                    handle_client(_stream);
+                });
             }
             Err(e) => {
                 println!("error: {}", e);
