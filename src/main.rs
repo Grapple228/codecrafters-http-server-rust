@@ -4,12 +4,19 @@ use std::{
 
 use bytes::buf::{self, Reader};
 use http_server_starter_rust::ThreadPool;
+use itertools::Itertools;
 enum RequestType {
     GET,
     POST,
     PUT,
     DELETE,
     UNKNOWN
+}
+
+#[derive(Debug, Copy, Clone)]
+enum CompressionType{
+    none,
+    gzip
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -28,6 +35,12 @@ impl fmt::Display for StatusCode {
     }
 }
 
+impl fmt::Display for CompressionType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 struct Request{
     request_type: RequestType,
     content_type: String,
@@ -37,7 +50,8 @@ struct Request{
     host: String,
     accept: String,
     content_length: i32,
-    contents: Vec<u8>
+    contents: Vec<u8>,
+    compression_type: CompressionType
 }
 
 fn split_into(path: &str, splitter: char) -> Vec<&str> {
@@ -83,6 +97,7 @@ impl Request {
         let mut host: String = String::new();
         let mut content_length: i32 = 0;
         let mut contents: Vec<u8> = Vec::new();
+        let mut compression_type = CompressionType::none;
 
         for line in &splitted_request{
             let (property, value) = line.split_once(": ").unwrap_or(("",""));
@@ -93,6 +108,12 @@ impl Request {
                 "Accept" => accept = value.to_owned(),
                 "Host" => host = value.to_owned(),
                 "Content-Length" => content_length = value.parse().unwrap_or(0),
+                "Accept-Encoding" => {
+                    let allowed_compressions = value.split(", ").filter(|&x| !x.is_empty()).collect_vec();
+                    if allowed_compressions.contains(&"gzip"){
+                        compression_type = CompressionType::gzip;
+                    }
+                },
                 _ => {}
             }
         };
@@ -112,7 +133,8 @@ impl Request {
             host,
             content_length,
             content_type,
-            contents
+            contents,
+            compression_type
         };
         request
     }
@@ -122,15 +144,20 @@ struct Response{
     status_code: StatusCode,
     status_message: String,
     contents: Vec<u8>,
-    content_type:String
+    content_type:String,
+    content_encoding: CompressionType
 }
 
 impl Response {
     fn to_string(&self) -> String{
-        let var_name: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\nContent-Length: {3}\r\n\r\n{4}", 
+        let var_name: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\n{3}Content-Length: {4}\r\n\r\n{5}", 
         self.status_code, 
         self.status_message, 
         self.content_type,
+        match &self.content_encoding{
+            CompressionType::none => "".to_string(),
+            ct => format!("Content-Encoding: {ct}\r\n"),
+        },
         self.contents.len(), 
         String::from_utf8(self.contents.to_owned()).unwrap());
         var_name
@@ -140,7 +167,9 @@ impl Response {
         Response { status_code: StatusCode::NotFound, 
             status_message: "Not Found".to_string(), 
             contents: Vec::new(), 
-            content_type: "text/plain".to_string() }
+            content_type: "text/plain".to_string(),
+            content_encoding: CompressionType::none
+            }
     }
 }
 
@@ -220,7 +249,7 @@ fn process_request(request: Request) -> Response {
     {
         let status_message = status_message.to_owned();
         let content_type = content_type.to_owned();
-        Response { status_code, status_message, contents, content_type }
+        Response { status_code, status_message, contents, content_type, content_encoding: request.compression_type }
     }
 }
 
