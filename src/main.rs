@@ -1,8 +1,7 @@
 // Uncomment this block to pass the first stage
 use std::{
         collections::HashMap, env::{self}, fmt, fs::{self, File}, io::{BufRead, BufReader, BufWriter, Read, Write}, net::{TcpListener, TcpStream}, path::Path};
-
-use bytes::buf::{self, Reader};
+use flate2::{write::GzEncoder, Compression};
 use http_server_starter_rust::ThreadPool;
 use itertools::Itertools;
 enum RequestType {
@@ -148,19 +147,41 @@ struct Response{
     content_encoding: CompressionType
 }
 
-impl Response {
-    fn to_string(&self) -> String{
-        let var_name: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\n{3}Content-Length: {4}\r\n\r\n{5}", 
-        self.status_code, 
-        self.status_message, 
-        self.content_type,
-        match &self.content_encoding{
-            CompressionType::none => "".to_string(),
-            ct => format!("Content-Encoding: {ct}\r\n"),
+fn compress(vec: &Vec<u8>, compression_type: CompressionType) -> Vec<u8>{
+    let compressed: Vec<u8>;
+    match compression_type{
+        CompressionType::gzip => {
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+            encoder.write_all(vec).unwrap();
+            compressed = encoder.finish().unwrap();
         },
-        self.contents.len(), 
-        String::from_utf8(self.contents.to_owned()).unwrap());
-        var_name
+        _ => compressed = vec.to_owned()
+    };
+    compressed
+}
+
+impl Response {
+    fn to_vec(&self) -> Vec<u8> {
+        let compressed: Vec<u8> = compress(&self.contents, self.content_encoding);
+
+        let headers: String = format!("HTTP/1.1 {0} {1}\r\nContent-Type: {2}\r\n{3}Content-Length: {4}\r\n\r\n", 
+            self.status_code, 
+            self.status_message, 
+            self.content_type,
+            match &self.content_encoding{
+                CompressionType::none => "".to_string(),
+                ct => format!("Content-Encoding: {ct}\r\n"),
+            },
+            compressed.len());
+
+        let mut buffer: Vec<u8> = Vec::new();
+        {
+            let mut writer = BufWriter::new(&mut buffer);
+            let _ = writer.write(headers.as_bytes());
+            let _ = writer.write(&compressed);
+            let _ = writer.flush();
+        }
+        buffer
     }
 
     fn not_found() -> Response{
@@ -227,6 +248,8 @@ fn process_request(request: Request) -> Response {
                     let _ = file.write(&request.contents);
                     let _ = file.flush();
 
+                    println!("File writed succesfully '{_path:#?}'");
+
                     status_message = "Created";
                     status_code = StatusCode::Created;
                 },
@@ -249,6 +272,7 @@ fn process_request(request: Request) -> Response {
     {
         let status_message = status_message.to_owned();
         let content_type = content_type.to_owned();
+
         Response { status_code, status_message, contents, content_type, content_encoding: request.compression_type }
     }
 }
@@ -259,12 +283,9 @@ fn handle_client(mut stream: TcpStream){
 
     let response = process_request(request);
 
-    let response_string = response.to_string();
-    println!("Outcoming response:\n[\n{response_string}\n]");
-
     // WRITING RESPONSE
     let mut writer = BufWriter::new(&mut stream);
-    if writer.write_all(response_string.as_bytes()).is_err(){
+    if writer.write_all(&response.to_vec()).is_err(){
         println!("Failed to response to stream!");
     }
     if writer.flush().is_err(){

@@ -12,14 +12,14 @@
                 "args": [
                     "build",
                     "--bin=http-server-starter-rust",
-                    "--package=http-server-starter-rust"
+                    "--package=http-server-starter-rust",
                 ],
                 "filter": {
                     "name": "http-server-starter-rust",
                     "kind": "bin"
                 }
             },
-            "args": [],
+            "args": ["--directory","C:/Users/green/Desktop"],
             "cwd": "${workspaceFolder}"
         },
         {
