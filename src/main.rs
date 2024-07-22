@@ -1,8 +1,8 @@
 // Uncomment this block to pass the first stage
 use std::{
-        collections::HashMap, default, env::{self, vars}, fmt, fs::File, io::{BufRead, BufReader, BufWriter, Read, Write}, net::{TcpListener, TcpStream}, path::{self, Path}};
+        collections::HashMap, env::{self}, fmt, fs::{self, File}, io::{BufRead, BufReader, BufWriter, Read, Write}, net::{TcpListener, TcpStream}, path::Path};
 
-use bytes::buf;
+use bytes::buf::{self, Reader};
 use http_server_starter_rust::ThreadPool;
 enum RequestType {
     GET,
@@ -14,9 +14,11 @@ enum RequestType {
 
 #[derive(Debug, Copy, Clone)]
 enum StatusCode{
-    OK= 200,
+    Ok= 200,
+    Created= 201,
     Bad= 400,
     Unauthorized= 401,
+    Forbidden= 403,
     NotFound= 404,    
 }
 
@@ -34,7 +36,8 @@ struct Request{
     user_agent: String,
     host: String,
     accept: String,
-    content_length: i32
+    content_length: i32,
+    contents: Vec<u8>
 }
 
 fn split_into(path: &str, splitter: char) -> Vec<&str> {
@@ -42,7 +45,7 @@ fn split_into(path: &str, splitter: char) -> Vec<&str> {
 }
 
 impl Request {
-    fn split_request(reader: BufReader<&mut TcpStream>) -> Vec<String> {
+    fn split_request(reader: &mut BufReader<&mut TcpStream>) -> Vec<String> {
         reader
             .lines()
             .map(|result| result.unwrap())
@@ -51,8 +54,10 @@ impl Request {
     }
 
     /// Creates a new [`Request`].
-    fn new(reader: BufReader<&mut TcpStream>) -> Self{
-        let splitted_request =  Self::split_request(reader);
+    fn new(stream: &mut TcpStream) -> Self{
+        let mut reader = BufReader::new(stream);
+
+        let splitted_request =  Self::split_request(&mut reader);
         
         println!("Processing request:\n{splitted_request:#?}");
 
@@ -77,6 +82,7 @@ impl Request {
         let mut accept: String = String::new();
         let mut host: String = String::new();
         let mut content_length: i32 = 0;
+        let mut contents: Vec<u8> = Vec::new();
 
         for line in &splitted_request{
             let (property, value) = line.split_once(": ").unwrap_or(("",""));
@@ -91,6 +97,12 @@ impl Request {
             }
         };
 
+        if content_length > 0{
+            let mut buffer = vec![0; content_length as usize]; 
+            reader.read_exact(&mut buffer).unwrap();
+            contents = buffer
+        }
+
         let request = Self{
             accept,
             request_type,
@@ -100,6 +112,7 @@ impl Request {
             host,
             content_length,
             content_type,
+            contents
         };
         request
     }
@@ -122,50 +135,87 @@ impl Response {
         String::from_utf8(self.contents.to_owned()).unwrap());
         var_name
     }
+
+    fn not_found() -> Response{
+        Response { status_code: StatusCode::NotFound, 
+            status_message: "Not Found".to_string(), 
+            contents: Vec::new(), 
+            content_type: "text/plain".to_string() }
+    }
 }
 
-fn process_request(request: Request) -> Response {    
+fn process_request(request: Request) -> Response {
     let path_segments: &[&str] = &split_into(&request.path, '/');
     
-    let mut status_code = StatusCode::OK;
+    let mut status_message: &str = "OK";
+    let mut status_code = StatusCode::Ok;
     let mut content_type: &str = "text/plain";
     let mut contents: Vec<u8> = "".as_bytes().to_owned();
-    let mut status_message: &str = "OK";
     let _directory: String;
 
-    match &path_segments {
-        [] | ["index.html"] => {},
-        ["user-agent"] => {
-            contents = request.user_agent.as_bytes().to_owned();
-        }
-        ["echo", _echo] => {
-            contents = _echo.as_bytes().to_owned();
+    match request.request_type{
+        RequestType::GET =>{
+            match &path_segments {
+                [] | ["index.html"] => {},
+                ["user-agent"] => { contents = request.user_agent.as_bytes().to_owned(); }
+                ["echo", _echo] => { contents = _echo.as_bytes().to_owned(); },
+                ["files", _filename] => {
+                    _directory = env::var("directory").unwrap_or("Path not set".to_string());
+        
+                    let combined_path = format!("{_directory}/{_filename}");
+                    let _path =Path::new(&combined_path);
+                    
+                    println!("Trying to get file '{_path:#?}'");
+        
+                    if _path.exists(){
+                        let _file = File::open(_path).unwrap();
+        
+                        let mut reader = BufReader::new(_file);
+
+                        let _ = reader.read_to_end(&mut contents);
+                        
+                        content_type = "application/octet-stream";
+                    } else {
+                        return Response::not_found();
+                    }
+                },
+                _ => { return Response::not_found(); }
+            };
         },
-        ["files", _filename] => {
-            _directory = env::var("directory").unwrap_or("Path not set".to_string());
+        RequestType::POST => {
+            match &path_segments {
+                ["files", _filename] => {
+                    _directory = env::var("directory").unwrap_or("Path not set".to_string());
+        
+                    let combined_path = format!("{_directory}/{_filename}");
+                    let _path =Path::new(&combined_path);
+                    
+                    println!("Trying to write file '{_path:#?}'");
 
-            let combined_path = format!("{_directory}/{_filename}");
-            let _path =Path::new(&combined_path);
-            
-            println!("Trying to get file '{_path:#?}'");
+                    let file = fs::OpenOptions::new().create(true).append(true).open(&_path).unwrap();
+                    
+                    let mut file = BufWriter::new(file);
+                    let _ = file.write(&request.contents);
+                    let _ = file.flush();
 
-            if _path.exists(){
-                let _file = File::open(_path).unwrap();
-
-                let mut reader = BufReader::new(_file);
-                let _ = reader.read_to_end(&mut contents);
-                
-                content_type = "application/octet-stream";
-            } else{
-                status_code = StatusCode::NotFound;
-                status_message = "Not Found";
-            }
+                    status_message = "Created";
+                    status_code = StatusCode::Created;
+                },
+                _ => { return Response::not_found(); }
+            };
         },
-        _ => {
-            status_code = StatusCode::NotFound;
-            status_message = "Not Found";
-        }
-    };
+        RequestType::PUT => {
+            match &path_segments {
+                _ => { return Response::not_found(); }
+            };
+        },
+        RequestType::DELETE => {
+            match &path_segments {
+                _ => { return Response::not_found(); }
+            };
+        },
+        _ => { return Response::not_found(); }
+    }
 
     {
         let status_message = status_message.to_owned();
@@ -175,10 +225,8 @@ fn process_request(request: Request) -> Response {
 }
 
 fn handle_client(mut stream: TcpStream){
-    // READ REQUEST
-    let reader = BufReader::new(&mut stream);
-    
-    let request = Request::new(reader);
+    // READ REQUEST    
+    let request = Request::new(&mut stream);
 
     let response = process_request(request);
 
